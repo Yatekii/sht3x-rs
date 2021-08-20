@@ -1,32 +1,24 @@
 //! Driver for Sensirion SHT3x-DIS digital temperature/humidity sensors
-
 #![no_std]
 
-extern crate byteorder;
-extern crate embedded_hal;
-
-use byteorder::{ByteOrder, BigEndian};
-
-use embedded_hal::blocking::delay::DelayMs;
+use byteorder::{BigEndian, ByteOrder};
 use embedded_hal::blocking::i2c::{Read, Write, WriteRead};
 
-pub struct SHT3x<I2C, D> {
+pub struct SHT3x<I2C> {
     i2c: I2C,
-    delay: D,
     address: Address,
 }
 
-impl<I2C, D, E> SHT3x<I2C, D>
+impl<I2C, E> SHT3x<I2C>
 where
     I2C: Read<Error = E> + Write<Error = E> + WriteRead<Error = E>,
-    D: DelayMs<u8>,
 {
-	/// Creates a new driver
-    pub fn new(i2c: I2C, delay: D, address: Address) -> Self {
-        SHT3x { i2c, delay, address }
+    /// Creates a new driver
+    pub fn new(i2c: I2C, address: Address) -> Self {
+        SHT3x { i2c, address }
     }
 
-	/// Send an I2C command
+    /// Send an I2C command
     fn command(&mut self, command: Command) -> Result<(), Error<E>> {
         let mut cmd_bytes = [0; 2];
         BigEndian::write_u16(&mut cmd_bytes, command.value());
@@ -35,19 +27,27 @@ where
             .map_err(Error::I2c)
     }
 
-	/// Take a temperature and humidity measurement
-    pub fn measure(&mut self, rpt: Repeatability) -> Result<Measurement, Error<E>> {
+    /// Start a temperature and humidity measurement.
+    pub fn start_measurement(&mut self, rpt: Repeatability) -> Result<(), Error<E>> {
         self.command(Command::SingleShot(ClockStretch::Disabled, rpt))?;
-        self.delay.delay_ms(rpt.max_duration());
-        let mut buf = [0; 6];
-        self.i2c.read(self.address as u8, &mut buf)
-                .map_err(Error::I2c)?;
-        let temperature = convert_temperature(BigEndian::read_u16(&buf[0..2]));
-        let humidity = convert_humidity(BigEndian::read_u16(&buf[3..5]));
-        Ok(Measurement{ temperature, humidity })
+        Ok(())
     }
 
-	/// Read the status register
+    /// Read back a temperature and humidity measurement.
+    pub fn read_measurement(&mut self) -> Result<Measurement, Error<E>> {
+        let mut buf = [0; 6];
+        self.i2c
+            .read(self.address as u8, &mut buf)
+            .map_err(Error::I2c)?;
+        let temperature = convert_temperature(BigEndian::read_u16(&buf[0..2]));
+        let humidity = convert_humidity(BigEndian::read_u16(&buf[3..5]));
+        Ok(Measurement {
+            temperature,
+            humidity,
+        })
+    }
+
+    /// Read the status register
     pub fn status(&mut self) -> Result<u16, Error<E>> {
         self.command(Command::Status)?;
         let mut status_bytes = [0; 2];
@@ -78,9 +78,9 @@ pub enum Error<E> {
 /// I2C address
 #[derive(Copy, Clone)]
 pub enum Address {
-	/// Address pin held high
+    /// Address pin held high
     High = 0x45,
-	/// Address pin held low
+    /// Address pin held low
     Low = 0x44,
 }
 
@@ -105,15 +105,15 @@ enum ClockStretch {
 /// Periodic data acquisition rate
 #[allow(non_camel_case_types)]
 enum Rate {
-	/// 0.5 measurements per second
+    /// 0.5 measurements per second
     R0_5,
-	/// 1 measurement per second
+    /// 1 measurement per second
     R1,
-	/// 2 measurements per second
+    /// 2 measurements per second
     R2,
-	/// 4 measurements per second
+    /// 4 measurements per second
     R4,
-	/// 10 measurements per second
+    /// 10 measurements per second
     R10,
 }
 
@@ -126,7 +126,7 @@ pub enum Repeatability {
 
 impl Repeatability {
     /// Maximum measurement duration in milliseconds
-    fn max_duration(&self) -> u8 {
+    pub fn max_duration(&self) -> u8 {
         match *self {
             Repeatability::Low => 4,
             Repeatability::Medium => 6,
@@ -143,37 +143,37 @@ pub struct Measurement {
 
 impl Command {
     fn value(&self) -> u16 {
-        use ClockStretch::Enabled as CSEnabled;
         use ClockStretch::Disabled as CSDisabled;
+        use ClockStretch::Enabled as CSEnabled;
         use Rate::*;
         use Repeatability::*;
         match *self {
             // 4.3 Measurement Commands for Single Shot Data Acquisition Mode
             // Table 8
-            Command::SingleShot(CSEnabled,  High)   => 0x2C06,
-            Command::SingleShot(CSEnabled,  Medium) => 0x2C0D,
-            Command::SingleShot(CSEnabled,  Low)    => 0x2C10,
-            Command::SingleShot(CSDisabled, High)   => 0x2400,
+            Command::SingleShot(CSEnabled, High) => 0x2C06,
+            Command::SingleShot(CSEnabled, Medium) => 0x2C0D,
+            Command::SingleShot(CSEnabled, Low) => 0x2C10,
+            Command::SingleShot(CSDisabled, High) => 0x2400,
             Command::SingleShot(CSDisabled, Medium) => 0x240B,
-            Command::SingleShot(CSDisabled, Low)    => 0x2416,
+            Command::SingleShot(CSDisabled, Low) => 0x2416,
 
             // 4.5 Measurement Commands for Periodic Data Acquisition Mode
             // Table 9
-            Command::Periodic(R0_5, High)   => 0x2032,
+            Command::Periodic(R0_5, High) => 0x2032,
             Command::Periodic(R0_5, Medium) => 0x2024,
-            Command::Periodic(R0_5, Low)    => 0x202F,
-            Command::Periodic(R1,   High)   => 0x2130,
-            Command::Periodic(R1,   Medium) => 0x2126,
-            Command::Periodic(R1,   Low)    => 0x212D,
-            Command::Periodic(R2,   High)   => 0x2236,
-            Command::Periodic(R2,   Medium) => 0x2220,
-            Command::Periodic(R2,   Low)    => 0x222B,
-            Command::Periodic(R4,   High)   => 0x2334,
-            Command::Periodic(R4,   Medium) => 0x2322,
-            Command::Periodic(R4,   Low)    => 0x2329,
-            Command::Periodic(R10,  High)   => 0x2737,
-            Command::Periodic(R10,  Medium) => 0x2721,
-            Command::Periodic(R10,  Low)    => 0x272A,
+            Command::Periodic(R0_5, Low) => 0x202F,
+            Command::Periodic(R1, High) => 0x2130,
+            Command::Periodic(R1, Medium) => 0x2126,
+            Command::Periodic(R1, Low) => 0x212D,
+            Command::Periodic(R2, High) => 0x2236,
+            Command::Periodic(R2, Medium) => 0x2220,
+            Command::Periodic(R2, Low) => 0x222B,
+            Command::Periodic(R4, High) => 0x2334,
+            Command::Periodic(R4, Medium) => 0x2322,
+            Command::Periodic(R4, Low) => 0x2329,
+            Command::Periodic(R10, High) => 0x2737,
+            Command::Periodic(R10, Medium) => 0x2721,
+            Command::Periodic(R10, Low) => 0x272A,
 
             // 4.6 Readout of Measurement Results for Periodic Mode
             // Table 10
@@ -193,7 +193,7 @@ impl Command {
 
             // 4.10 Heater
             // Table 15
-            Command::HeaterEnable  => 0x306D,
+            Command::HeaterEnable => 0x306D,
             Command::HeaterDisable => 0x3066,
 
             // 4.11 Status register
@@ -208,6 +208,5 @@ impl Command {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn it_works() {
-    }
+    fn it_works() {}
 }

@@ -8,10 +8,11 @@ license = "MIT OR Apache-2.0"
 name = "sht3x"
 repository = "https://github.com/miek/sht3x-rs"
 version = "0.1.1"
+edition = "2018"
 
 [dependencies]
 byteorder = { version = "1", default-features = false }
-embedded-hal = "0.1.1"
+embedded-hal = "0.2.6"
 
 [dev-dependencies]
-linux-embedded-hal = "0.1.1"
+linux-embedded-hal = "0.3.0"
